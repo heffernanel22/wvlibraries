@@ -1,0 +1,123 @@
+---
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+#Load packages and set-up. Also load your first dataframe.
+```{r}
+#Loading packages
+library(tidyverse)
+library(stringr)
+library(lubridate)
+library(tigris)
+library(pacman)
+library(censusapi)
+library(leaflet)
+library(sf)
+p_load(leaflet,glue,dplyr,sf,tmap,tmaptools,tidycensus,ggmap,htmltools, htmlwidgets)
+p_load_gh(c("walkerke/tigris","bhaskarvk/leaflet.extras"))
+options(tigris_use_cache = TRUE)
+
+
+#Loading and cleaning dataframe
+wv_library_income_over_time <- read_csv("wv_library_income_over_time.csv")
+wv_library_income_over_time <- wv_library_income_over_time[1:9]
+
+
+#Loading census key
+census_key <- "ee879694947d7f51fb7006bed7d04d8d980a42fc"
+Sys.setenv(CENSUS_KEY=census_key)
+install = TRUE
+
+scipen = 999
+```
+
+#Creating aggregate data  showing percent change per county, not per library 
+```{r}
+#Creating this data 
+wv_library_income_over_time_per_county <- wv_library_income_over_time %>% group_by(county) %>% summarise(`2016`=sum(`2016`,na.rm = TRUE),`2021`=sum(`2021`,na.rm=TRUE)) %>% mutate(pct_change=((`2021`-`2016`)/`2016`)*100) %>% filter(pct_change<0) %>% arrange(desc(pct_change))
+
+#Limiting this data to 2 decimals
+wv_library_income_over_time_per_county$pct_change <-wv_library_income_over_time_per_county$pct_change %>% round(digits = 2)
+```
+
+#Creating a shapefile & combining it with our library finance dataframe to help us make an interactive map. 
+```{r}
+wv_counties <- counties(state = "WV",year = "2019",cb = T)
+wv_counties <-wv_counties %>% rename(county = NAME)
+wv_map <-left_join(wv_counties,wv_library_income_over_time_per_county)
+
+
+```
+
+#Creating the actual map. We've also filtered for certain values so the map only colors in counties that have experienced decreases. 
+```{r}
+ 
+#Creating a color palette 
+pal1 <-colorNumeric(c("navy","lightskyblue"),domain=c(0,-50),na.color = "white")
+
+#Creating a popup
+popup_wv_library <- paste0(as.character(wv_map$county,domain=c(0,-50))," County </br>",as.character(wv_map$pct_change,domain=c(0,-50)),"% decrease")
+
+#Creating the map 
+wv_interactive_library_map <- leaflet() %>% addProviderTiles("CartoDB.DarkMatterNoLabels") %>% setView(-79.20,38.90,zoom =6.5) %>% addPolygons(data = wv_map,fillColor =~pal1(wv_map$pct_change),fillOpacity = 10,weight = .6,smoothFactor=.4,popup =~ popup_wv_library) %>% addLegend(pal=pal1,values=c(0,-50),position = "bottomright",title = "% decrease in funding") 
+
+#Viewing the map
+wv_interactive_library_map
+
+```
+
+
+#Loading in a new spreadsheet, showing us the proportion of each library's funding that's accounted for by property taxes
+```{r}
+wv_property_tax_over_time <- read_csv("wv_property_tax_over_time.csv")
+wv_property_tax_over_time <-wv_property_tax_over_time %>% select(conty, library,`2016_pct_property_tax`,`2021_pct_property_tax`,`2016_tax`,`2016_total`,`2021_tax`,`2021_total`) 
+
+#Pivoting, so we have a table showing the proportion of each COUNTY's library funding accounted for by local taxes, as opposed to each library
+wv_property_tax_over_time <- wv_property_tax_over_time %>% group_by(conty) %>% summarise(`2016_tax`=sum(`2016_tax`),`2016_total`=sum(`2016_total`),`2021_total`=sum(`2021_total`),`2021_tax` = sum(`2021_tax`)) %>% mutate(`2016_pct_property_tax` = (`2016_tax`/`2016_total`)*100,`2021_pct_property_tax` = (`2021_tax`/`2021_total`)*100)
+
+#Cleaning it up
+wv_property_tax_over_time$`2016_pct_property_tax` <-as.numeric(wv_property_tax_over_time$`2016_pct_property_tax`)
+wv_property_tax_over_time$`2021_pct_property_tax` <-as.numeric(wv_property_tax_over_time$`2021_pct_property_tax`)
+```
+
+#Making a new column for percent change in property tax reliance
+```{r}
+wv_property_tax_over_time <-wv_property_tax_over_time %>% mutate(pct_change=((`2021_pct_property_tax`-`2016_pct_property_tax`)/`2016_pct_property_tax`)*100)
+
+#Rounding
+wv_property_tax_over_time$pct_change <-round(wv_property_tax_over_time$pct_change,digits = 2)
+```
+
+
+#Combining this dataframe with our previously created shapefile. We also entered a line to make sure only counties that show increases in property tax reliance are highlighted.
+```{r}
+wv_property_tax_over_time <- wv_property_tax_over_time %>% rename (county = conty)
+wv_property_tax_over_time <-wv_property_tax_over_time  %>% filter(pct_change >=0)
+wv_map_2 <- left_join(wv_counties,wv_property_tax_over_time) 
+
+
+```
+
+
+
+#Creating the property tax map
+```{r}
+ 
+#Creating a color palette 
+
+pal2 <-colorNumeric(c("lightskyblue","navy"),domain=c(0,114),na.color = "white")
+#Creating a popup
+popup_wv_library2 <- paste0(as.character(wv_map_2$county,domain=c(0,114)),"</br> County </br>",as.character(wv_map_2$pct_change,domain=c(0,114)),"% increase")
+
+#Creating the map 
+wv_interactive_library_map2 <- leaflet() %>% addProviderTiles("CartoDB.DarkMatterNoLabels") %>% setView(-79.20,38.90,zoom =6.5) %>% addPolygons(data = wv_map_2,fillColor =~pal2(wv_map_2$pct_change),fillOpacity = 10,weight = .6,smoothFactor=.4,popup =~ popup_wv_library2) %>% addLegend(pal=pal2,values=c(0,114),position = "bottomright",title = "% increase in funding") 
+
+wv_interactive_library_map2
+
+```
+
